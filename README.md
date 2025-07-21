@@ -17,6 +17,7 @@
         const rawFirebaseConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
         let firebaseConfig;
         const USER_PROVIDED_PROJECT_ID = 'learn-7e4e0'; // 사용자님이 제공한 프로젝트 ID
+        const ADMIN_CODE = 'lc1001'; // 관리자 코드 정의
 
         try {
             firebaseConfig = JSON.parse(rawFirebaseConfig);
@@ -28,7 +29,6 @@
             }
         } catch (e) {
             console.error("Error parsing __firebase_config. Using user-provided projectId as fallback:", USER_PROVIDED_PROJECT_ID, e);
-            firebaseConfig = { projectId: USER_PROVIDED_PROJECT_ID }; // 파싱 오류 시 사용자 제공 ID로 대체
             showMessage("Firebase 설정 파싱 오류: 관리자에게 문의하세요. (기본 프로젝트 ID 사용)", 'error');
         }
 
@@ -36,14 +36,21 @@
 
         let app, db;
         let userCode = localStorage.getItem('userCode') || null; // Load user code from local storage
-        let isAdmin = (userCode === "lc1001"); // Admin status based on loaded code
+        let isAdmin = (userCode === ADMIN_CODE); // Admin status based on loaded code
+
+        // Variables to store unsubscribe functions for real-time listeners
+        let unsubscribeAvailability = null;
+        let unsubscribeMyBookings = null;
+        let unsubscribeAdminDashboard = null;
+        let unsubscribeModalTimeSlots = null;
 
         // Custom Message Box
         function showMessage(message, type = 'info') {
             const messageBox = document.getElementById('message-box');
             const messageText = document.getElementById('message-text');
             messageText.textContent = message;
-            messageBox.className = `fixed bottom-4 right-4 p-4 rounded-lg shadow-lg z-50 text-white`;
+            // Ensure message box is on top and visible
+            messageBox.className = `fixed bottom-4 right-4 p-4 rounded-lg shadow-lg z-[999] text-white`;
             if (type === 'success') {
                 messageBox.classList.add('bg-green-500');
             } else if (type === 'error') {
@@ -54,7 +61,7 @@
             messageBox.classList.remove('hidden');
             setTimeout(() => {
                 messageBox.classList.add('hidden');
-            }, 3000);
+            }, 5000); // Display for 5 seconds
         }
 
         // Initialize Firebase
@@ -192,45 +199,124 @@
 
         // Fetch and Display Classroom Availability (Main Booking Section)
         async function fetchAndDisplayAvailability(date) {
+            // Unsubscribe from previous listener if exists
+            if (unsubscribeAvailability) {
+                unsubscribeAvailability();
+                unsubscribeAvailability = null;
+            }
+
             const availabilityContainer = document.getElementById('classroom-availability');
-            availabilityContainer.innerHTML = '<p class="text-center text-gray-500">불러오는 중...</p>';
+            availabilityContainer.innerHTML = '<p class="text-center text-gray-500">강의실 대여 현황 불러오는 중...</p>';
 
             const formattedDate = date.toISOString().split('T')[0]; // YYYY-MM-DD
             const bookingsRef = getBookingsCollection();
             const q = query(bookingsRef, where('date', '==', formattedDate));
 
-            try {
-                const querySnapshot = await getDocs(q);
-                const bookedSlots = {}; // { classroomId: { startTime: status } }
+            unsubscribeAvailability = onSnapshot(q, (querySnapshot) => {
+                try {
+                    const bookedSlots = {}; // { classroomId: { startTime: status } }
 
-                querySnapshot.forEach(doc => {
-                    const booking = doc.data();
-                    if (!bookedSlots[booking.classroomId]) {
-                        bookedSlots[booking.classroomId] = {};
-                    }
-                    bookedSlots[booking.classroomId][booking.startTime] = booking.status;
-                });
+                    querySnapshot.forEach(doc => {
+                        const booking = doc.data();
+                        if (!bookedSlots[booking.classroomId]) {
+                            bookedSlots[booking.classroomId] = {};
+                        }
+                        bookedSlots[booking.classroomId][booking.startTime] = booking.status;
+                    });
 
-                availabilityContainer.innerHTML = `
-                    <h3 class="text-xl font-bold mb-4 text-gray-800">${formattedDate} 강의실 대여 현황</h3>
-                    <div class="space-y-6"></div>
-                `;
-                const classroomListDiv = availabilityContainer.querySelector('div.space-y-6');
-
-                classrooms.forEach(classroom => {
-                    const classroomDiv = document.createElement('div');
-                    classroomDiv.className = 'bg-white p-6 rounded-lg shadow-md';
-                    classroomDiv.innerHTML = `
-                        <h4 class="text-lg font-semibold mb-3 text-blue-700">${classroom.name} (${classroom.capacity}인)</h4>
-                        <p class="text-gray-600 mb-4">${classroom.description}</p>
-                        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+                    availabilityContainer.innerHTML = `
+                        <h3 class="text-xl font-bold mb-4 text-gray-800">${formattedDate} 강의실 대여 현황</h3>
+                        <div class="space-y-6"></div>
                     `;
-                    const timeSlotGrid = classroomDiv.querySelector('div.grid');
+                    const classroomListDiv = availabilityContainer.querySelector('div.space-y-6');
+
+                    classrooms.forEach(classroom => {
+                        const classroomDiv = document.createElement('div');
+                        classroomDiv.className = 'bg-white p-6 rounded-lg shadow-md';
+                        classroomDiv.innerHTML = `
+                            <h4 class="text-lg font-semibold mb-3 text-blue-700">${classroom.name} (${classroom.capacity}인)</h4>
+                            <p class="text-gray-600 mb-4">${classroom.description}</p>
+                            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+                        `;
+                        const timeSlotGrid = classroomDiv.querySelector('div.grid');
+
+                        timeSlots.forEach(slot => {
+                            const status = bookedSlots[classroom.id] && bookedSlots[classroom.id][slot]
+                                ? bookedSlots[classroom.id][slot]
+                                : 'available';
+                            
+                            const slotButton = document.createElement('button');
+                            slotButton.className = `w-full py-2 px-3 rounded-md text-sm font-medium transition-colors duration-200`;
+                            slotButton.textContent = slot;
+
+                            if (status === 'available') {
+                                slotButton.classList.add('bg-green-100', 'text-green-800', 'hover:bg-green-200');
+                                slotButton.addEventListener('click', () => openBookingPurposeModal(classroom, formattedDate, slot));
+                            } else if (status === 'pending') {
+                                slotButton.classList.add('bg-yellow-100', 'text-yellow-800', 'cursor-not-allowed');
+                                slotButton.textContent += ' (대기)';
+                                slotButton.disabled = true;
+                            } else if (status === 'approved') {
+                                slotButton.classList.add('bg-red-100', 'text-red-800', 'cursor-not-allowed');
+                                slotButton.textContent += ' (예약 완료)';
+                                slotButton.disabled = true;
+                            } else if (status === 'rejected') {
+                                 slotButton.classList.add('bg-gray-100', 'text-gray-600', 'cursor-not-allowed');
+                                 slotButton.textContent += ' (거절됨)';
+                                 slotButton.disabled = true;
+                            } else if (status === 'cancelled') { // Added cancelled status
+                                slotButton.classList.add('bg-gray-200', 'text-gray-500', 'cursor-not-allowed');
+                                slotButton.textContent += ' (취소됨)';
+                                slotButton.disabled = true;
+                            }
+                            timeSlotGrid.appendChild(slotButton);
+                        });
+                        classroomListDiv.appendChild(classroomDiv);
+                    });
+
+                } catch (error) {
+                    console.error("강의실 예약 현황 불러오기 오류:", error);
+                    showMessage("예약 현황을 불러오는 데 실패했습니다.", 'error');
+                    availabilityContainer.innerHTML = '<p class="text-center text-red-500">예약 현황을 불러올 수 없습니다.</p>';
+                }
+            }, (error) => {
+                console.error("강의실 예약 현황 실시간 업데이트 오류:", error);
+                showMessage("예약 현황 실시간 업데이트에 실패했습니다. " + error.message, 'error');
+                availabilityContainer.innerHTML = '<p class="text-center text-red-500">예약 현황을 불러올 수 없습니다.</p>';
+            });
+        }
+
+        // Fetch and Display Time Slots for a Single Classroom (Inside Modal)
+        async function fetchAndDisplayTimeSlotsForSingleClassroom(classroom, date) {
+            // Unsubscribe from previous listener if exists
+            if (unsubscribeModalTimeSlots) {
+                unsubscribeModalTimeSlots();
+                unsubscribeModalTimeSlots = null;
+            }
+
+            const timeSlotDisplay = document.getElementById('modal-time-slots');
+            timeSlotDisplay.innerHTML = '<p class="text-center text-gray-500">시간대 불러오는 중...</p>';
+
+            const formattedDate = date.toISOString().split('T')[0]; // YYYY-MM-DD
+            const bookingsRef = getBookingsCollection();
+            const q = query(bookingsRef, where('date', '==', formattedDate), where('classroomId', '==', classroom.id));
+
+            unsubscribeModalTimeSlots = onSnapshot(q, (querySnapshot) => {
+                try {
+                    const bookedSlots = {};
+                    querySnapshot.forEach(doc => {
+                        const booking = doc.data();
+                        bookedSlots[booking.startTime] = booking.status;
+                    });
+
+                    timeSlotDisplay.innerHTML = `
+                        <h4 class="text-lg font-semibold mb-3 text-gray-800">${formattedDate} - ${classroom.name} 시간대</h4>
+                        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3"></div>
+                    `;
+                    const timeSlotGrid = timeSlotDisplay.querySelector('div.grid');
 
                     timeSlots.forEach(slot => {
-                        const status = bookedSlots[classroom.id] && bookedSlots[classroom.id][slot]
-                            ? bookedSlots[classroom.id][slot]
-                            : 'available';
+                        const status = bookedSlots[slot] ? bookedSlots[slot] : 'available';
                         
                         const slotButton = document.createElement('button');
                         slotButton.className = `w-full py-2 px-3 rounded-md text-sm font-medium transition-colors duration-200`;
@@ -238,7 +324,10 @@
 
                         if (status === 'available') {
                             slotButton.classList.add('bg-green-100', 'text-green-800', 'hover:bg-green-200');
-                            slotButton.addEventListener('click', () => openBookingPurposeModal(classroom, formattedDate, slot));
+                            slotButton.addEventListener('click', () => {
+                                closeClassroomSelectDateModal();
+                                openBookingPurposeModal(classroom, formattedDate, slot);
+                            });
                         } else if (status === 'pending') {
                             slotButton.classList.add('bg-yellow-100', 'text-yellow-800', 'cursor-not-allowed');
                             slotButton.textContent += ' (대기)';
@@ -248,79 +337,27 @@
                             slotButton.textContent += ' (예약 완료)';
                             slotButton.disabled = true;
                         } else if (status === 'rejected') {
-                             slotButton.classList.add('bg-gray-100', 'text-gray-600', 'cursor-not-allowed');
-                             slotButton.textContent += ' (거절됨)';
-                             slotButton.disabled = true;
+                            slotButton.classList.add('bg-gray-100', 'text-gray-600', 'cursor-not-allowed');
+                            slotButton.textContent += ' (거절됨)';
+                            slotButton.disabled = true;
+                        } else if (status === 'cancelled') { // Added cancelled status
+                            slotButton.classList.add('bg-gray-200', 'text-gray-500', 'cursor-not-allowed');
+                            slotButton.textContent += ' (취소됨)';
+                            slotButton.disabled = true;
                         }
                         timeSlotGrid.appendChild(slotButton);
                     });
-                    classroomListDiv.appendChild(classroomDiv);
-                });
 
-            } catch (error) {
-                console.error("강의실 예약 현황 불러오기 오류:", error);
-                showMessage("예약 현황을 불러오는 데 실패했습니다.", 'error');
-                availabilityContainer.innerHTML = '<p class="text-center text-red-500">예약 현황을 불러올 수 없습니다.</p>';
-            }
-        }
-
-        // Fetch and Display Time Slots for a Single Classroom (Inside Modal)
-        async function fetchAndDisplayTimeSlotsForSingleClassroom(classroom, date) {
-            const timeSlotDisplay = document.getElementById('modal-time-slots');
-            timeSlotDisplay.innerHTML = '<p class="text-center text-gray-500">시간대 불러오는 중...</p>';
-
-            const formattedDate = date.toISOString().split('T')[0]; // YYYY-MM-DD
-            const bookingsRef = getBookingsCollection();
-            const q = query(bookingsRef, where('date', '==', formattedDate), where('classroomId', '==', classroom.id));
-
-            try {
-                const querySnapshot = await getDocs(q);
-                const bookedSlots = {};
-                querySnapshot.forEach(doc => {
-                    const booking = doc.data();
-                    bookedSlots[booking.startTime] = booking.status;
-                });
-
-                timeSlotDisplay.innerHTML = `
-                    <h4 class="text-lg font-semibold mb-3 text-gray-800">${formattedDate} - ${classroom.name} 시간대</h4>
-                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3"></div>
-                `;
-                const timeSlotGrid = timeSlotDisplay.querySelector('div.grid');
-
-                timeSlots.forEach(slot => {
-                    const status = bookedSlots[slot] ? bookedSlots[slot] : 'available';
-                    
-                    const slotButton = document.createElement('button');
-                    slotButton.className = `w-full py-2 px-3 rounded-md text-sm font-medium transition-colors duration-200`;
-                    slotButton.textContent = slot;
-
-                    if (status === 'available') {
-                        slotButton.classList.add('bg-green-100', 'text-green-800', 'hover:bg-green-200');
-                        slotButton.addEventListener('click', () => {
-                            closeClassroomSelectDateModal();
-                            openBookingPurposeModal(classroom, formattedDate, slot);
-                        });
-                    } else if (status === 'pending') {
-                        slotButton.classList.add('bg-yellow-100', 'text-yellow-800', 'cursor-not-allowed');
-                        slotButton.textContent += ' (대기)';
-                        slotButton.disabled = true;
-                    } else if (status === 'approved') {
-                        slotButton.classList.add('bg-red-100', 'text-red-800', 'cursor-not-allowed');
-                        slotButton.textContent += ' (예약 완료)';
-                        slotButton.disabled = true;
-                    } else if (status === 'rejected') {
-                        slotButton.classList.add('bg-gray-100', 'text-gray-600', 'cursor-not-allowed');
-                        slotButton.textContent += ' (거절됨)';
-                        slotButton.disabled = true;
-                    }
-                    timeSlotGrid.appendChild(slotButton);
-                });
-
-            } catch (error) {
-                console.error("단일 강의실 시간대 불러오기 오류:", error);
-                showMessage("시간대를 불러오는 데 실패했습니다.", 'error');
+                } catch (error) {
+                    console.error("단일 강의실 시간대 불러오기 오류:", error);
+                    showMessage("시간대를 불러오는 데 실패했습니다.", 'error');
+                    timeSlotDisplay.innerHTML = '<p class="text-center text-red-500">시간대를 불러올 수 없습니다.</p>';
+                }
+            }, (error) => {
+                console.error("단일 강의실 시간대 실시간 업데이트 오류:", error);
+                showMessage("시간대 실시간 업데이트에 실패했습니다. " + error.message, 'error');
                 timeSlotDisplay.innerHTML = '<p class="text-center text-red-500">시간대를 불러올 수 없습니다.</p>';
-            }
+            });
         }
 
         // Booking Purpose Modal (Final step for booking)
@@ -344,6 +381,7 @@
 
         bookingPurposeForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            console.log("예약 신청 시도 중..."); // Debug log
             const purpose = document.getElementById('booking-purpose-input').value.trim();
             const enteredUserCode = document.getElementById('booking-user-code-input').value.trim();
 
@@ -359,13 +397,14 @@
             // Update userCode globally and in localStorage when booking
             userCode = enteredUserCode;
             localStorage.setItem('userCode', userCode);
-            isAdmin = (userCode === "lc1001"); // Update admin status
+            isAdmin = (userCode === ADMIN_CODE); // Update admin status
 
             const { classroom, date, slot } = currentBookingDetails;
             const bookingsRef = getBookingsCollection();
 
             try {
                 // Check for existing pending/approved booking for the same slot
+                // Use getDocs for this one-time check to avoid potential race conditions with onSnapshot
                 const q = query(bookingsRef, 
                     where('classroomId', '==', classroom.id),
                     where('date', '==', date),
@@ -377,8 +416,8 @@
                 if (!existingBookings.empty) {
                     showMessage("해당 시간대는 이미 예약되었거나 예약 대기 중입니다.", 'error');
                     closeBookingPurposeModal();
-                    fetchAndDisplayAvailability(new Date(date)); // Refresh main availability
-                    fetchAndDisplayTimeSlotsForSingleClassroom(classroom, new Date(date)); // Refresh modal availability if open
+                    // No need to explicitly call fetchAndDisplayAvailability/TimeSlots here
+                    // as onSnapshot listeners will automatically update the UI.
                     return;
                 }
 
@@ -395,13 +434,14 @@
                     createdAt: new Date()
                 });
                 showMessage("예약 신청이 완료되었습니다. 관리자 승인 후 반영됩니다.", 'success');
+                console.log("예약 신청 성공:", { classroomId: classroom.id, date, slot, userId: userCode, purpose }); // Debug log
                 closeBookingPurposeModal();
-                fetchAndDisplayAvailability(new Date(date)); // Refresh main availability
-                renderMyBookings(); // Refresh my bookings
+                // No need to explicitly call fetchAndDisplayAvailability/TimeSlots/renderMyBookings here
+                // as onSnapshot listeners will automatically update the UI.
                 renderApp(); // Re-render app to update admin link if code was admin
             } catch (error) {
                 console.error("예약 신청 오류:", error);
-                showMessage("예약 신청 중 오류가 발생했습니다.", 'error');
+                showMessage("예약 신청 중 오류가 발생했습니다. 자세한 내용은 콘솔을 확인해주세요.", 'error');
             }
         });
 
@@ -422,12 +462,23 @@
 
         function closeClassroomSelectDateModal() {
             classroomSelectDateModal.classList.add('hidden');
+            // Unsubscribe modal time slots listener when modal is closed
+            if (unsubscribeModalTimeSlots) {
+                unsubscribeModalTimeSlots();
+                unsubscribeModalTimeSlots = null;
+            }
         }
 
         // My Bookings
         async function renderMyBookings() {
+            // Unsubscribe from previous listener if exists
+            if (unsubscribeMyBookings) {
+                unsubscribeMyBookings();
+                unsubscribeMyBookings = null;
+            }
+
             const myBookingsList = document.getElementById('my-bookings-list');
-            myBookingsList.innerHTML = '<p class="text-center text-gray-500">불러오는 중...</p>';
+            myBookingsList.innerHTML = '<p class="text-center text-gray-500">내 예약 현황 불러오는 중...</p>';
 
             if (!userCode) {
                 myBookingsList.innerHTML = `
@@ -437,12 +488,13 @@
                         <button id="set-my-bookings-code-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">코드 입력</button>
                     </div>
                 `;
+                document.getElementById('my-bookings-user-code-input').value = localStorage.getItem('userCode') || ''; // Pre-fill
                 document.getElementById('set-my-bookings-code-btn').addEventListener('click', () => {
                     const enteredCode = document.getElementById('my-bookings-user-code-input').value.trim();
                     if (enteredCode) {
                         userCode = enteredCode;
                         localStorage.setItem('userCode', userCode);
-                        isAdmin = (userCode === "lc1001"); // Update admin status
+                        isAdmin = (userCode === ADMIN_CODE); // Update admin status
                         renderMyBookings(); // Re-render this section with bookings
                         renderApp(); // Re-render app to update admin link
                     } else {
@@ -455,67 +507,109 @@
             const bookingsRef = getBookingsCollection();
             const q = query(bookingsRef, where('userId', '==', userCode), orderBy('createdAt', 'desc'));
 
-            try {
-                const querySnapshot = await getDocs(q);
-                if (querySnapshot.empty) {
-                    myBookingsList.innerHTML = '<p class="text-center text-gray-500">아직 예약 내역이 없습니다.</p>';
-                    return;
-                }
-
-                let bookingsHtml = `
-                    <div class="overflow-x-auto bg-white rounded-lg shadow-md p-4">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">강의실</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">날짜</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">시간</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">목적</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                `;
-                querySnapshot.forEach(doc => {
-                    const booking = doc.data();
-                    let statusClass = '';
-                    let statusText = '';
-                    if (booking.status === 'pending') {
-                        statusClass = 'bg-yellow-100 text-yellow-800';
-                        statusText = '대기 중';
-                    } else if (booking.status === 'approved') {
-                        statusClass = 'bg-green-100 text-green-800';
-                        statusText = '승인됨';
-                    } else if (booking.status === 'rejected') {
-                        statusClass = 'bg-red-100 text-red-800';
-                        statusText = '거절됨';
+            unsubscribeMyBookings = onSnapshot(q, (querySnapshot) => {
+                try {
+                    if (querySnapshot.empty) {
+                        myBookingsList.innerHTML = '<p class="text-center text-gray-500">아직 예약 내역이 없습니다.</p>';
+                        return;
                     }
 
-                    bookingsHtml += `
-                        <tr>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${booking.className}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.date}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.startTime} - ${booking.endTime}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.purpose}</td>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">${statusText}</span>
-                            </td>
-                        </tr>
+                    let bookingsHtml = `
+                        <div class="overflow-x-auto bg-white rounded-lg shadow-md p-4">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">강의실</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">날짜</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">시간</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">목적</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">관리</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
                     `;
-                });
-                bookingsHtml += `</tbody></table></div>`;
-                myBookingsList.innerHTML = bookingsHtml;
-            } catch (error) {
-                console.error("내 예약 불러오기 오류:", error);
-                showMessage("내 예약 내역을 불러오는 데 실패했습니다.", 'error');
+                    querySnapshot.forEach(doc => {
+                        const booking = doc.data();
+                        let statusClass = '';
+                        let statusText = '';
+                        let showCancelButton = false;
+
+                        if (booking.status === 'pending') {
+                            statusClass = 'bg-yellow-100 text-yellow-800';
+                            statusText = '대기 중';
+                            showCancelButton = true; // 대기 중인 예약은 취소 가능
+                        } else if (booking.status === 'approved') {
+                            statusClass = 'bg-green-100 text-green-800';
+                            statusText = '승인됨';
+                            showCancelButton = true; // 승인된 예약도 취소 가능
+                        } else if (booking.status === 'rejected') {
+                            statusClass = 'bg-gray-100 text-gray-600';
+                            statusText = '거절됨';
+                            showCancelButton = false;
+                        } else if (booking.status === 'cancelled') { // Added cancelled status
+                            statusClass = 'bg-gray-200 text-gray-500';
+                            statusText = '취소됨';
+                            showCancelButton = false;
+                        }
+
+                        bookingsHtml += `
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${booking.className}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.date}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.startTime} - ${booking.endTime}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.purpose}</td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClass}">${statusText}</span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                    ${showCancelButton ? `<button data-id="${doc.id}" 
+                                                                 data-classroom="${booking.className}" 
+                                                                 data-date="${booking.date}" 
+                                                                 data-time="${booking.startTime}-${booking.endTime}"
+                                                                 class="cancel-btn bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md">취소</button>` : ''}
+                                </td>
+                            </tr>
+                        `;
+                    });
+                    bookingsHtml += `</tbody></table></div>`;
+                    myBookingsList.innerHTML = bookingsHtml;
+
+                    // Attach event listeners for cancel buttons
+                    myBookingsList.querySelectorAll('.cancel-btn').forEach(button => {
+                        button.addEventListener('click', (e) => {
+                            const bookingId = e.target.dataset.id;
+                            const bookingDetails = {
+                                classroom: e.target.dataset.classroom,
+                                date: e.target.dataset.date,
+                                time: e.target.dataset.time
+                            };
+                            openCancelConfirmationModal(bookingId, bookingDetails);
+                        });
+                    });
+
+                } catch (error) {
+                    console.error("내 예약 불러오기 오류:", error);
+                    showMessage("내 예약 내역을 불러오는 데 실패했습니다.", 'error');
+                    myBookingsList.innerHTML = '<p class="text-center text-red-500">예약 내역을 불러올 수 없습니다.</p>';
+                }
+            }, (error) => {
+                console.error("내 예약 실시간 업데이트 오류:", error);
+                showMessage("내 예약 실시간 업데이트에 실패했습니다. " + error.message, 'error');
                 myBookingsList.innerHTML = '<p class="text-center text-red-500">예약 내역을 불러올 수 없습니다.</p>';
-            }
+            });
         }
 
         // Admin Dashboard
         async function renderAdminDashboard() {
+            // Unsubscribe from previous listener if exists
+            if (unsubscribeAdminDashboard) {
+                unsubscribeAdminDashboard();
+                unsubscribeAdminDashboard = null;
+            }
+
             const adminDashboardList = document.getElementById('pending-bookings-list');
-            adminDashboardList.innerHTML = '<p class="text-center text-gray-500">불러오는 중...</p>';
+            adminDashboardList.innerHTML = '<p class="text-center text-gray-500">관리자 대시보드 불러오는 중...</p>';
 
             if (!isAdmin) {
                 adminDashboardList.innerHTML = '<p class="text-center text-red-500">관리자만 접근할 수 있습니다.</p>';
@@ -525,75 +619,105 @@
             const bookingsRef = getBookingsCollection();
             const q = query(bookingsRef, where('status', '==', 'pending'), orderBy('createdAt', 'asc'));
 
-            try {
-                const querySnapshot = await getDocs(q);
-                if (querySnapshot.empty) {
-                    adminDashboardList.innerHTML = '<p class="text-center text-gray-500">대기 중인 예약 요청이 없습니다.</p>';
-                    return;
-                }
+            unsubscribeAdminDashboard = onSnapshot(q, (querySnapshot) => {
+                try {
+                    if (querySnapshot.empty) {
+                        adminDashboardList.innerHTML = '<p class="text-center text-gray-500">대기 중인 예약 요청이 없습니다.</p>';
+                        return;
+                    }
 
-                let bookingsHtml = `
-                    <div class="overflow-x-auto bg-white rounded-lg shadow-md p-4">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">강의실</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">날짜</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">시간</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">신청자</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">목적</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">관리</th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                `;
-                querySnapshot.forEach(doc => {
-                    const booking = doc.data();
-                    bookingsHtml += `
-                        <tr>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${booking.className}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.date}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.startTime} - ${booking.endTime}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.userName} <span class="text-gray-400">(${booking.userId})</span></td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.purpose}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                <button data-id="${doc.id}" data-status="approved" class="approve-btn bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md mr-2">승인</button>
-                                <button data-id="${doc.id}" data-status="rejected" class="reject-btn bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md">거절</button>
-                            </td>
-                        </tr>
+                    let bookingsHtml = `
+                        <div class="overflow-x-auto bg-white rounded-lg shadow-md p-4">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">강의실</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">날짜</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">시간</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">신청자</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">목적</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">관리</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
                     `;
-                });
-                bookingsHtml += `</tbody></table></div>`;
-                adminDashboardList.innerHTML = bookingsHtml;
+                    querySnapshot.forEach(doc => {
+                        const booking = doc.data();
+                        bookingsHtml += `
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${booking.className}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.date}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.startTime} - ${booking.endTime}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.userName} <span class="text-gray-400">(${booking.userId})</span></td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${booking.purpose}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                    <button data-id="${doc.id}" data-status="approved" class="approve-btn bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md mr-2">승인</button>
+                                    <button data-id="${doc.id}" data-status="rejected" class="reject-btn bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md">거절</button>
+                                </td>
+                            </tr>
+                        `;
+                    });
+                    bookingsHtml += `</tbody></table></div>`;
+                    adminDashboardList.innerHTML = bookingsHtml;
 
-                adminDashboardList.querySelectorAll('.approve-btn').forEach(button => {
-                    button.addEventListener('click', (e) => updateBookingStatus(e.target.dataset.id, 'approved'));
-                });
-                adminDashboardList.querySelectorAll('.reject-btn').forEach(button => {
-                    button.addEventListener('click', (e) => updateBookingStatus(e.target.dataset.id, 'rejected'));
-                });
+                    adminDashboardList.querySelectorAll('.approve-btn').forEach(button => {
+                        button.addEventListener('click', (e) => updateBookingStatus(e.target.dataset.id, 'approved'));
+                    });
+                    adminDashboardList.querySelectorAll('.reject-btn').forEach(button => {
+                        button.addEventListener('click', (e) => updateBookingStatus(e.target.dataset.id, 'rejected'));
+                    });
 
-            } catch (error) {
-                console.error("관리자 대시보드 불러오기 오류:", error);
-                showMessage("관리자 대시보드를 불러오는 데 실패했습니다.", 'error');
+                } catch (error) {
+                    console.error("관리자 대시보드 불러오기 오류:", error);
+                    showMessage("관리자 대시보드를 불러오는 데 실패했습니다.", 'error');
+                    adminDashboardList.innerHTML = '<p class="text-center text-red-500">관리자 대시보드를 불러올 수 없습니다.</p>';
+                }
+            }, (error) => {
+                console.error("관리자 대시보드 실시간 업데이트 오류:", error);
+                showMessage("관리자 대시보드 실시간 업데이트에 실패했습니다. " + error.message, 'error');
                 adminDashboardList.innerHTML = '<p class="text-center text-red-500">관리자 대시보드를 불러올 수 없습니다.</p>';
-            }
+            });
         }
 
         async function updateBookingStatus(bookingId, status) {
             const bookingDocRef = doc(db, `artifacts/${appId}/public/data/bookings`, bookingId);
             try {
                 await updateDoc(bookingDocRef, { status: status });
-                showMessage(`예약이 ${status === 'approved' ? '승인' : '거절'}되었습니다.`, 'success');
-                // Re-render admin dashboard and classroom availability
-                renderAdminDashboard();
-                fetchAndDisplayAvailability(selectedDate);
-                renderMyBookings(); // Also refresh user's own bookings
+                showMessage(`예약이 ${status === 'approved' ? '승인' : status === 'rejected' ? '거절' : '취소'}되었습니다.`, 'success');
+                // onSnapshot listeners will automatically re-render relevant sections
             } catch (error) {
                 console.error("예약 상태 업데이트 오류:", error);
                 showMessage("예약 상태 업데이트에 실패했습니다.", 'error');
             }
         }
+
+        // New: Cancel Booking Confirmation Modal
+        const cancelConfirmationModal = document.getElementById('cancel-confirmation-modal');
+        const confirmCancelBtn = document.getElementById('confirm-cancel-btn');
+        let bookingIdToCancel = null;
+
+        function openCancelConfirmationModal(bookingId, details) {
+            bookingIdToCancel = bookingId;
+            document.getElementById('cancel-classroom-name').textContent = details.classroom;
+            document.getElementById('cancel-date').textContent = details.date;
+            document.getElementById('cancel-time').textContent = details.time;
+            cancelConfirmationModal.classList.remove('hidden');
+        }
+
+        function closeCancelConfirmationModal() {
+            cancelConfirmationModal.classList.add('hidden');
+            bookingIdToCancel = null; // Reset
+        }
+
+        confirmCancelBtn.addEventListener('click', async () => {
+            if (bookingIdToCancel) {
+                await updateBookingStatus(bookingIdToCancel, 'cancelled');
+                closeCancelConfirmationModal();
+            }
+        });
+
+        document.getElementById('cancel-cancel-btn').addEventListener('click', closeCancelConfirmationModal);
+
 
         // Render Classroom Info Section
         function renderClassroomInfo() {
@@ -623,8 +747,31 @@
             });
         }
 
+        // Function to unsubscribe all active listeners
+        function unsubscribeAllListeners() {
+            if (unsubscribeAvailability) {
+                unsubscribeAvailability();
+                unsubscribeAvailability = null;
+            }
+            if (unsubscribeMyBookings) {
+                unsubscribeMyBookings();
+                unsubscribeMyBookings = null;
+            }
+            if (unsubscribeAdminDashboard) {
+                unsubscribeAdminDashboard();
+                unsubscribeAdminDashboard = null;
+            }
+            if (unsubscribeModalTimeSlots) {
+                unsubscribeModalTimeSlots();
+                unsubscribeModalTimeSlots = null;
+            }
+        }
+
         // Navigation Logic
         function showSection(sectionId) {
+            // Unsubscribe all listeners before switching sections to prevent memory leaks
+            unsubscribeAllListeners();
+
             document.querySelectorAll('main section').forEach(section => {
                 section.classList.add('hidden');
             });
@@ -728,7 +875,7 @@
         }
         /* Custom styles for message box */
         #message-box {
-            animation: fadeInOut 3s forwards;
+            animation: fadeInOut 5s forwards; /* Increased display time */
         }
         @keyframes fadeInOut {
             0% { opacity: 0; transform: translateY(20px); }
@@ -882,6 +1029,28 @@
 
             <div id="modal-time-slots" class="p-4 bg-white rounded-lg shadow-inner">
                 <!-- Time slots for selected classroom and date will be displayed here by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- New: Cancel Confirmation Modal -->
+    <div id="cancel-confirmation-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden modal-overlay">
+        <div class="bg-white p-8 rounded-lg shadow-xl w-full max-w-md mx-4">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-2xl font-bold text-gray-900">예약 취소 확인</h3>
+                <button id="close-cancel-modal-btn" class="text-gray-500 hover:text-gray-700 text-2xl font-semibold">
+                    &times;
+                </button>
+            </div>
+            <p class="mb-4 text-gray-700">다음 예약을 정말 취소하시겠습니까?</p>
+            <div class="mb-4">
+                <p class="text-gray-700 text-sm font-bold mb-2">강의실: <span id="cancel-classroom-name" class="font-semibold text-blue-600"></span></p>
+                <p class="text-gray-700 text-sm font-bold mb-2">날짜: <span id="cancel-date" class="font-semibold text-gray-800"></span></p>
+                <p class="text-gray-700 text-sm font-bold mb-4">시간: <span id="cancel-time" class="font-semibold text-gray-800"></span></p>
+            </div>
+            <div class="flex justify-end space-x-4">
+                <button id="cancel-cancel-btn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-md focus:outline-none focus:shadow-outline">취소</button>
+                <button id="confirm-cancel-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md focus:outline-none focus:shadow-outline">확인</button>
             </div>
         </div>
     </div>
