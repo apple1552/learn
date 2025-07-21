@@ -14,7 +14,22 @@
         import { getFirestore, collection, addDoc, query, where, getDocs, doc, updateDoc, onSnapshot, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Firebase Configuration (provided by Canvas environment)
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const rawFirebaseConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
+        let firebaseConfig;
+        try {
+            firebaseConfig = JSON.parse(rawFirebaseConfig);
+            if (!firebaseConfig.projectId) {
+                console.error("Firebase configuration is missing 'projectId'. This is critical for connecting to your Firebase project. Please ensure __firebase_config is correctly set in the environment.");
+                // Provide a dummy projectId to prevent initializeApp from crashing, but the app won't connect to a real project.
+                firebaseConfig.projectId = 'dummy-project-id-missing';
+                showMessage("Firebase 설정 오류: Project ID가 없습니다. 관리자에게 문의하세요.", 'error');
+            }
+        } catch (e) {
+            console.error("Error parsing __firebase_config:", e);
+            firebaseConfig = { projectId: 'parsing-error-dummy' }; // Fallback for parsing error
+            showMessage("Firebase 설정 파싱 오류: 관리자에게 문의하세요.", 'error');
+        }
+
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
         let app, db;
@@ -43,13 +58,22 @@
         // Initialize Firebase
         function initializeFirebase() {
             try {
+                if (!firebaseConfig.projectId || firebaseConfig.projectId === 'dummy-project-id-missing' || firebaseConfig.projectId === 'parsing-error-dummy') {
+                    console.error("Cannot initialize Firebase: Project ID is invalid or missing.");
+                    document.getElementById('loading-overlay').classList.add('hidden');
+                    // Do not call initializeApp if projectId is known to be bad
+                    showMessage("Firebase 초기화 실패: 프로젝트 ID가 유효하지 않습니다.", 'error');
+                    return;
+                }
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 console.log("Firebase initialized.");
+                document.getElementById('loading-overlay').classList.add('hidden'); // Hide loading overlay here
                 renderApp(); // Initial render after Firebase is ready
             } catch (error) {
                 console.error("Firebase 초기화 오류:", error);
                 showMessage("Firebase 초기화에 실패했습니다. " + error.message, 'error');
+                document.getElementById('loading-overlay').classList.add('hidden');
             }
         }
 
@@ -715,7 +739,7 @@
 <body class="min-h-screen flex flex-col">
 
     <!-- Loading Overlay (Removed, as authentication is no longer required at start) -->
-    <div id="loading-overlay" class="fixed inset-0 bg-gray-200 bg-opacity-75 flex items-center justify-center z-[9999] hidden">
+    <div id="loading-overlay" class="fixed inset-0 bg-gray-200 bg-opacity-75 flex items-center justify-center z-[9999]">
         <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
         <p class="ml-4 text-lg text-gray-700">로딩 중...</p>
     </div>
