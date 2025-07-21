@@ -16,18 +16,20 @@
         // Firebase Configuration (provided by Canvas environment)
         const rawFirebaseConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
         let firebaseConfig;
+        const USER_PROVIDED_PROJECT_ID = 'learn-7e4e0'; // 사용자님이 제공한 프로젝트 ID
+
         try {
             firebaseConfig = JSON.parse(rawFirebaseConfig);
-            if (!firebaseConfig.projectId) {
-                console.error("Firebase configuration is missing 'projectId'. This is critical for connecting to your Firebase project. Please ensure __firebase_config is correctly set in the environment.");
-                // Provide a dummy projectId to prevent initializeApp from crashing, but the app won't connect to a real project.
-                firebaseConfig.projectId = 'dummy-project-id-missing';
-                showMessage("Firebase 설정 오류: Project ID가 없습니다. 관리자에게 문의하세요.", 'error');
+            // __firebase_config에 projectId가 없거나, 파싱 오류로 인해 projectId가 설정되지 않은 경우
+            // 사용자님이 제공한 projectId로 강제 설정합니다.
+            if (!firebaseConfig.projectId || firebaseConfig.projectId === 'dummy-project-id-missing' || firebaseConfig.projectId === 'parsing-error-dummy') {
+                firebaseConfig.projectId = USER_PROVIDED_PROJECT_ID;
+                console.warn("Firebase config's projectId was missing or invalid. Using user-provided projectId:", USER_PROVIDED_PROJECT_ID);
             }
         } catch (e) {
-            console.error("Error parsing __firebase_config:", e);
-            firebaseConfig = { projectId: 'parsing-error-dummy' }; // Fallback for parsing error
-            showMessage("Firebase 설정 파싱 오류: 관리자에게 문의하세요.", 'error');
+            console.error("Error parsing __firebase_config. Using user-provided projectId as fallback:", USER_PROVIDED_PROJECT_ID, e);
+            firebaseConfig = { projectId: USER_PROVIDED_PROJECT_ID }; // 파싱 오류 시 사용자 제공 ID로 대체
+            showMessage("Firebase 설정 파싱 오류: 관리자에게 문의하세요. (기본 프로젝트 ID 사용)", 'error');
         }
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -58,16 +60,16 @@
         // Initialize Firebase
         function initializeFirebase() {
             try {
+                // projectId가 여전히 유효하지 않거나 설정되지 않았다면 초기화 중단
                 if (!firebaseConfig.projectId || firebaseConfig.projectId === 'dummy-project-id-missing' || firebaseConfig.projectId === 'parsing-error-dummy') {
-                    console.error("Cannot initialize Firebase: Project ID is invalid or missing.");
+                    console.error("Cannot initialize Firebase: Project ID is invalid or missing after fallback.");
                     document.getElementById('loading-overlay').classList.add('hidden');
-                    // Do not call initializeApp if projectId is known to be bad
-                    showMessage("Firebase 초기화 실패: 프로젝트 ID가 유효하지 않습니다.", 'error');
+                    showMessage("Firebase 초기화 실패: 프로젝트 ID가 유효하지 않습니다. 관리자에게 문의하세요.", 'error');
                     return;
                 }
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
-                console.log("Firebase initialized.");
+                console.log("Firebase initialized with projectId:", firebaseConfig.projectId);
                 document.getElementById('loading-overlay').classList.add('hidden'); // Hide loading overlay here
                 renderApp(); // Initial render after Firebase is ready
             } catch (error) {
