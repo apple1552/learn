@@ -106,6 +106,20 @@
             '14:00', '15:00', '16:00', '17:00', '18:00'
         ];
 
+        // Helper to get all hourly slots within a range (e.g., '09:00', '11:00' -> ['09:00', '10:00'])
+        function getHourlySlotsInRange(startTime, endTime) {
+            const startIndex = timeSlots.indexOf(startTime);
+            const endIndex = timeSlots.indexOf(endTime); // This is the start of the *next* hour after the last booked hour
+            const slots = [];
+            if (startIndex === -1 || endIndex === -1 || startIndex >= endIndex) {
+                return slots;
+            }
+            for (let i = startIndex; i < endIndex; i++) {
+                slots.push(timeSlots[i]);
+            }
+            return slots;
+        }
+
         // Firestore Paths
         const getBookingsCollection = () => collection(db, `artifacts/${appId}/public/data/bookings`);
 
@@ -214,14 +228,18 @@
 
             unsubscribeAvailability = onSnapshot(q, (querySnapshot) => {
                 try {
-                    const bookedSlots = {}; // { classroomId: { startTime: status } }
-
+                    const bookedSlots = {}; // { classroomId: { hourlySlot: status } }
+                    // Process bookings to mark all affected hourly slots
                     querySnapshot.forEach(doc => {
                         const booking = doc.data();
+                        const hourlySlots = getHourlySlotsInRange(booking.startTime, booking.endTime);
                         if (!bookedSlots[booking.classroomId]) {
                             bookedSlots[booking.classroomId] = {};
                         }
-                        bookedSlots[booking.classroomId][booking.startTime] = booking.status;
+                        hourlySlots.forEach(slot => {
+                            // Mark the hourly slot with the booking's status
+                            bookedSlots[booking.classroomId][slot] = booking.status;
+                        });
                     });
 
                     availabilityContainer.innerHTML = `
@@ -240,7 +258,7 @@
                         `;
                         const timeSlotGrid = classroomDiv.querySelector('div.grid');
 
-                        timeSlots.forEach(slot => {
+                        timeSlots.forEach(slot => { // Iterate through all possible start times
                             const status = bookedSlots[classroom.id] && bookedSlots[classroom.id][slot]
                                 ? bookedSlots[classroom.id][slot]
                                 : 'available';
@@ -306,7 +324,10 @@
                     const bookedSlots = {};
                     querySnapshot.forEach(doc => {
                         const booking = doc.data();
-                        bookedSlots[booking.startTime] = booking.status;
+                        const hourlySlots = getHourlySlotsInRange(booking.startTime, booking.endTime);
+                        hourlySlots.forEach(slot => {
+                            bookedSlots[slot] = booking.status;
+                        });
                     });
 
                     timeSlotDisplay.innerHTML = `
@@ -366,15 +387,61 @@
         let currentBookingDetails = {};
 
         function openBookingPurposeModal(classroom, date, slot) {
-            currentBookingDetails = { classroom, date, slot };
+            currentBookingDetails = { classroom, date, startTime: slot }; // Store startTime
             document.getElementById('purpose-modal-classroom-name').textContent = classroom.name;
             document.getElementById('purpose-modal-date').textContent = date;
-            document.getElementById('purpose-modal-time').textContent = slot;
+            
+            // Populate start time dropdown
+            const startTimeSelect = document.getElementById('booking-start-time-select');
+            startTimeSelect.innerHTML = '';
+            timeSlots.forEach(time => {
+                const option = document.createElement('option');
+                option.value = time;
+                option.textContent = time;
+                startTimeSelect.appendChild(option);
+            });
+            startTimeSelect.value = slot; // Pre-select the clicked slot
+
+            // Populate end time dropdown based on selected start time
+            populateEndTimeOptions(slot);
+
             document.getElementById('booking-purpose-input').value = ''; // Clear previous input
             // Pre-fill with the current userCode from the header input or localStorage
             document.getElementById('booking-user-code-input').value = userCode || ''; 
             bookingPurposeModal.classList.remove('hidden');
         }
+
+        // Function to populate end time options
+        function populateEndTimeOptions(selectedStartTime) {
+            const endTimeSelect = document.getElementById('booking-end-time-select');
+            endTimeSelect.innerHTML = '';
+            const startIndex = timeSlots.indexOf(selectedStartTime);
+
+            if (startIndex === -1) return;
+
+            // End time can be from the next hour up to the last available hour
+            for (let i = startIndex + 1; i < timeSlots.length; i++) {
+                const option = document.createElement('option');
+                option.value = timeSlots[i];
+                option.textContent = timeSlots[i];
+                endTimeSelect.appendChild(option);
+            }
+            // Select the first available end time by default
+            if (endTimeSelect.options.length > 0) {
+                endTimeSelect.value = timeSlots[startIndex + 1];
+            }
+        }
+
+        // Event listener for start time change to update end time options
+        document.addEventListener('DOMContentLoaded', () => {
+            const startTimeSelect = document.getElementById('booking-start-time-select');
+            if (startTimeSelect) {
+                startTimeSelect.addEventListener('change', (e) => {
+                    populateEndTimeOptions(e.target.value);
+                });
+            }
+        });
+
 
         function closeBookingPurposeModal() {
             bookingPurposeModal.classList.add('hidden');
@@ -385,6 +452,8 @@
             console.log("예약 신청 시도 중..."); // Debug log
             const purpose = document.getElementById('booking-purpose-input').value.trim();
             const enteredUserCode = document.getElementById('booking-user-code-input').value.trim();
+            const startTime = document.getElementById('booking-start-time-select').value;
+            const endTime = document.getElementById('booking-end-time-select').value;
 
             if (!enteredUserCode) {
                 showMessage("예약을 위해 '내 코드'를 입력해주세요.", 'error');
@@ -392,6 +461,14 @@
             }
             if (!purpose) {
                 showMessage("대여 목적을 입력해주세요.", 'error');
+                return;
+            }
+            if (!startTime || !endTime) {
+                showMessage("시작 시간과 종료 시간을 선택해주세요.", 'error');
+                return;
+            }
+            if (timeSlots.indexOf(startTime) >= timeSlots.indexOf(endTime)) {
+                showMessage("종료 시간은 시작 시간보다 늦어야 합니다.", 'error');
                 return;
             }
 
@@ -406,25 +483,40 @@
                 headerUserCodeInput.value = userCode;
             }
 
-            const { classroom, date, slot } = currentBookingDetails;
+            const { classroom, date } = currentBookingDetails;
             const bookingsRef = getBookingsCollection();
 
             try {
-                // Check for existing pending/approved booking for the same slot
-                // Use getDocs for this one-time check to avoid potential race conditions with onSnapshot
+                // Get all hourly slots for the requested booking range
+                const requestedHourlySlots = getHourlySlotsInRange(startTime, endTime);
+
+                // Check for existing pending/approved/cancelled bookings that overlap with the requested range
                 const q = query(bookingsRef, 
                     where('classroomId', '==', classroom.id),
-                    where('date', '==', date),
-                    where('startTime', '==', slot),
-                    where('status', 'in', ['pending', 'approved'])
+                    where('date', '==', date)
+                    // Cannot directly query for time range overlap in Firestore efficiently without complex indexing.
+                    // Fetch all for the day and check in client-side.
                 );
-                const existingBookings = await getDocs(q);
+                const existingBookingsSnapshot = await getDocs(q);
+                let isOverlap = false;
 
-                if (!existingBookings.empty) {
-                    showMessage("해당 시간대는 이미 예약되었거나 예약 대기 중입니다.", 'error');
+                existingBookingsSnapshot.forEach(doc => {
+                    const existingBooking = doc.data();
+                    // Only check against pending, approved, or cancelled bookings
+                    if (['pending', 'approved', 'cancelled'].includes(existingBooking.status)) {
+                        const existingHourlySlots = getHourlySlotsInRange(existingBooking.startTime, existingBooking.endTime);
+                        // Check for any common hourly slots
+                        const commonSlots = requestedHourlySlots.filter(slot => existingHourlySlots.includes(slot));
+                        if (commonSlots.length > 0) {
+                            isOverlap = true;
+                            return; // Exit forEach early if overlap found
+                        }
+                    }
+                });
+
+                if (isOverlap) {
+                    showMessage("해당 시간대에 이미 예약된(또는 대기/취소된) 슬롯이 있습니다. 다른 시간을 선택해주세요.", 'error');
                     closeBookingPurposeModal();
-                    // No need to explicitly call fetchAndDisplayAvailability/TimeSlots here
-                    // as onSnapshot listeners will automatically update the UI.
                     return;
                 }
 
@@ -432,8 +524,8 @@
                     classroomId: classroom.id,
                     className: classroom.name,
                     date: date,
-                    startTime: slot,
-                    endTime: timeSlots[timeSlots.indexOf(slot) + 1] || '다음 시간', // Simple end time for display
+                    startTime: startTime,
+                    endTime: endTime, // Store the selected end time
                     userId: userCode, // Use userCode here
                     userName: userCode, // Use userCode as userName
                     purpose: purpose,
@@ -441,10 +533,8 @@
                     createdAt: new Date()
                 });
                 showMessage("예약 신청이 완료되었습니다. 관리자 승인 후 반영됩니다.", 'success');
-                console.log("예약 신청 성공:", { classroomId: classroom.id, date, slot, userId: userCode, purpose }); // Debug log
-                closeBookingPurposeModal();
-                // No need to explicitly call fetchAndDisplayAvailability/TimeSlots/renderMyBookings here
-                // as onSnapshot listeners will automatically update the UI.
+                console.log("예약 신청 성공:", { classroomId: classroom.id, date, startTime, endTime, userId: userCode, purpose }); // Debug log
+                closeBookingPurposeModal(); // Close popup on successful reservation
                 renderApp(); // Re-render app to update admin link if code was admin
             } catch (error) {
                 console.error("예약 신청 오류:", error);
@@ -579,7 +669,8 @@
                                     ${showCancelButton ? `<button data-id="${doc.id}" 
                                                                  data-classroom="${booking.className}" 
                                                                  data-date="${booking.date}" 
-                                                                 data-time="${booking.startTime}-${booking.endTime}"
+                                                                 data-start-time="${booking.startTime}"
+                                                                 data-end-time="${booking.endTime}"
                                                                  class="cancel-btn bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md">취소</button>` : ''}
                                 </td>
                             </tr>
@@ -595,7 +686,8 @@
                             const bookingDetails = {
                                 classroom: e.target.dataset.classroom,
                                 date: e.target.dataset.date,
-                                time: e.target.dataset.time
+                                startTime: e.target.dataset.startTime,
+                                endTime: e.target.dataset.endTime
                             };
                             openCancelConfirmationModal(bookingId, bookingDetails);
                         });
@@ -714,7 +806,7 @@
             bookingIdToCancel = bookingId;
             document.getElementById('cancel-classroom-name').textContent = details.classroom;
             document.getElementById('cancel-date').textContent = details.date;
-            document.getElementById('cancel-time').textContent = details.time;
+            document.getElementById('cancel-time').textContent = `${details.startTime} - ${details.endTime}`; // Display full range
             cancelConfirmationModal.classList.remove('hidden');
         }
 
@@ -943,7 +1035,7 @@
     </header>
 
     <!-- Main Content -->
-    <main class="flex-grow container mx-auto p-6 bg-white rounded-lg shadow-xl my-8">
+    <main class="flex-grow container mx-auto p-6 bg-white rounded-lg shadow-xl my-8 max-w-5xl">
         <!-- Classroom Booking Section (Calendar-first) -->
         <section id="booking-section" class="hidden">
             <h2 class="text-3xl font-bold mb-6 text-gray-900">강의실 예약 (날짜 선택 후)</h2>
@@ -1015,8 +1107,12 @@
                     <p id="purpose-modal-date" class="text-lg font-semibold text-gray-800"></p>
                 </div>
                 <div class="mb-4">
-                    <label class="block text-gray-700 text-sm font-bold mb-2">시간:</label>
-                    <p id="purpose-modal-time" class="text-lg font-semibold text-gray-800"></p>
+                    <label for="booking-start-time-select" class="block text-gray-700 text-sm font-bold mb-2">시작 시간:</label>
+                    <select id="booking-start-time-select" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required></select>
+                </div>
+                <div class="mb-6">
+                    <label for="booking-end-time-select" class="block text-gray-700 text-sm font-bold mb-2">종료 시간:</label>
+                    <select id="booking-end-time-select" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required></select>
                 </div>
                 <div class="mb-6">
                     <label for="booking-user-code-input" class="block text-gray-700 text-sm font-bold mb-2">내 코드 입력:</label>
