@@ -371,7 +371,8 @@
             document.getElementById('purpose-modal-date').textContent = date;
             document.getElementById('purpose-modal-time').textContent = slot;
             document.getElementById('booking-purpose-input').value = ''; // Clear previous input
-            document.getElementById('booking-user-code-input').value = userCode || ''; // Pre-fill if userCode exists
+            // Pre-fill with the current userCode from the header input or localStorage
+            document.getElementById('booking-user-code-input').value = userCode || ''; 
             bookingPurposeModal.classList.remove('hidden');
         }
 
@@ -398,6 +399,12 @@
             userCode = enteredUserCode;
             localStorage.setItem('userCode', userCode);
             isAdmin = (userCode === ADMIN_CODE); // Update admin status
+
+            // Update the header input field with the newly entered user code
+            const headerUserCodeInput = document.getElementById('header-user-code-input');
+            if (headerUserCodeInput) {
+                headerUserCodeInput.value = userCode;
+            }
 
             const { classroom, date, slot } = currentBookingDetails;
             const bookingsRef = getBookingsCollection();
@@ -488,13 +495,19 @@
                         <button id="set-my-bookings-code-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">코드 입력</button>
                     </div>
                 `;
-                document.getElementById('my-bookings-user-code-input').value = localStorage.getItem('userCode') || ''; // Pre-fill
+                // Pre-fill with the current userCode from the header input or localStorage
+                document.getElementById('my-bookings-user-code-input').value = userCode || ''; 
                 document.getElementById('set-my-bookings-code-btn').addEventListener('click', () => {
                     const enteredCode = document.getElementById('my-bookings-user-code-input').value.trim();
                     if (enteredCode) {
                         userCode = enteredCode;
                         localStorage.setItem('userCode', userCode);
                         isAdmin = (userCode === ADMIN_CODE); // Update admin status
+                        // Update the header input field with the newly entered user code
+                        const headerUserCodeInput = document.getElementById('header-user-code-input');
+                        if (headerUserCodeInput) {
+                            headerUserCodeInput.value = userCode;
+                        }
                         renderMyBookings(); // Re-render this section with bookings
                         renderApp(); // Re-render app to update admin link
                     } else {
@@ -694,6 +707,7 @@
         // New: Cancel Booking Confirmation Modal
         const cancelConfirmationModal = document.getElementById('cancel-confirmation-modal');
         const confirmCancelBtn = document.getElementById('confirm-cancel-btn');
+        const closeCancelModalBtn = document.getElementById('close-cancel-modal-btn'); // Close button for cancel modal
         let bookingIdToCancel = null;
 
         function openCancelConfirmationModal(bookingId, details) {
@@ -717,6 +731,7 @@
         });
 
         document.getElementById('cancel-cancel-btn').addEventListener('click', closeCancelConfirmationModal);
+        closeCancelModalBtn.addEventListener('click', closeCancelConfirmationModal); // Attach listener to close button
 
 
         // Render Classroom Info Section
@@ -849,6 +864,22 @@
 
         // Initial Firebase setup
         initializeFirebase();
+
+        // New: Event listener for the header user code input
+        document.addEventListener('DOMContentLoaded', () => {
+            const headerUserCodeInput = document.getElementById('header-user-code-input');
+            if (headerUserCodeInput) {
+                // Set initial value from localStorage if available
+                headerUserCodeInput.value = localStorage.getItem('userCode') || '';
+
+                headerUserCodeInput.addEventListener('input', (e) => {
+                    userCode = e.target.value.trim();
+                    localStorage.setItem('userCode', userCode);
+                    isAdmin = (userCode === ADMIN_CODE);
+                    renderApp(); // Re-render app to update admin link and current section
+                });
+            }
+        });
     </script>
 
     <style>
@@ -898,7 +929,11 @@
         <nav class="container mx-auto px-4 flex justify-between items-center">
             <h1 class="text-2xl font-bold text-blue-800">강의실 대여 시스템</h1>
             <div class="flex items-center space-x-6">
-                <!-- User code input removed from header as per request -->
+                <!-- New: User code input in header -->
+                <div class="flex items-center space-x-2">
+                    <label for="header-user-code-input" class="text-gray-700 text-sm font-medium">내 코드:</label>
+                    <input type="text" id="header-user-code-input" placeholder="코드 입력" class="border rounded px-2 py-1 text-sm w-28 text-gray-700">
+                </div>
                 <a href="#booking-section" class="nav-link text-gray-600 hover:text-blue-700 pb-1 border-b-2 border-transparent">강의실 예약</a>
                 <a href="#classroom-info-section" class="nav-link text-gray-600 hover:text-blue-700 pb-1 border-b-2 border-transparent">강의실 정보</a>
                 <a href="#my-bookings-section" class="nav-link text-gray-600 hover:text-blue-700 pb-1 border-b-2 border-transparent">내 예약 현황</a>
